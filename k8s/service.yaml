@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: brandpilot
+spec:
+  selector:
+    app: brandpilot
+  ports:
+    - port: 8010
+      targetPort: 8010

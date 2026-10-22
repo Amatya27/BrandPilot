@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: brandpilot
+  labels:
+    app: brandpilot
+spec:
+  # One replica on purpose: job status is kept in memory, so a second pod would not know
+  # about jobs started on the first. Scaling out needs a shared store such as Redis first.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: brandpilot
+  template:
+    metadata:
+      labels:
+        app: brandpilot
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8010"
+        prometheus.io/path: /metrics
+    spec:
+      containers:
+        - name: brandpilot
+          image: brandpilot:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8010
+          envFrom:
+            - configMapRef:
+                name: brandpilot-config
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8010
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8010
+            initialDelaySeconds: 10
+            periodSeconds: 15

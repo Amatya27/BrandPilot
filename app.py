@@ -4,16 +4,19 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel, Field
+from starlette.routing import Match
 
 from brand_assistant_keras_backend import KerasBackendConfig
 from brand_assistant_openai_backend import OpenAICompatibleConfig
@@ -63,6 +66,39 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Prometheus metrics. Labels use the route template (/api/jobs/{job_id}), not the raw URL,
+# so every job id does not become a new time series.
+REQUESTS = Counter("brandpilot_http_requests_total", "HTTP requests", ["method", "route", "status"])
+LATENCY = Histogram("brandpilot_http_request_seconds", "HTTP request latency in seconds", ["route"])
+JOBS = Counter("brandpilot_generation_jobs_total", "Finished generation jobs", ["result"])
+JOB_SECONDS = Histogram(
+    "brandpilot_generation_job_seconds", "Time to finish a generation job",
+    buckets=(1, 5, 10, 20, 30, 60, 120, 300),
+)
+
+
+def route_template(request: Request) -> str:
+    for route in app.router.routes:
+        match, _ = route.matches(request.scope)
+        if match == Match.FULL:
+            return getattr(route, "path", "unmatched")
+    return "unmatched"
+
+
+@app.middleware("http")
+async def record_metrics(request: Request, call_next):
+    route_path = route_template(request)
+    start = time.perf_counter()
+    response = await call_next(request)
+    LATENCY.labels(route_path).observe(time.perf_counter() - start)
+    REQUESTS.labels(request.method, route_path, str(response.status_code)).inc()
+    return response
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
 
 @app.get("/")
 async def serve_index() -> FileResponse:
@@ -91,14 +127,19 @@ def update_job(job_id: str, *, status: str | None = None, message: str | None = 
 
 
 def run_generation_job(job_id: str, company: str, person: str) -> None:
+    started = time.perf_counter()
     try:
         def progress(step: str, message: str) -> None:
             update_job(job_id, status="running", message=message)
 
         result = service.generate(company, person, progress_callback=progress)
         update_job(job_id, status="completed", message="Generation completed", result=result)
+        JOBS.labels("completed").inc()
     except Exception as exc:
         update_job(job_id, status="failed", message="Generation failed", error=str(exc))
+        JOBS.labels("failed").inc()
+    finally:
+        JOB_SECONDS.observe(time.perf_counter() - started)
 
 
 @app.post("/api/generate")

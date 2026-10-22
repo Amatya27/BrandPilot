@@ -19,3 +19,13 @@ def test_generate_rejects_blank_company():
 
 def test_unknown_job_returns_404():
     assert client.get("/api/jobs/does-not-exist").status_code == 404
+
+
+def test_metrics_endpoint_counts_requests():
+    client.get("/api/health")
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    body = response.text
+    assert "brandpilot_http_requests_total" in body
+    assert 'route="/api/health"' in body
+    assert "brandpilot_generation_jobs_total" in body
