@@ -1,447 +1,133 @@
-# LoRA Brand Assistant
+# BrandPilot
 
 [![CI](https://github.com/Amatya27/BrandPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Amatya27/BrandPilot/actions/workflows/ci.yml)
 
-This project turns your notebook prototype into a cleaner LoRA + RAG workflow for brand outreach.
+BrandPilot researches a company's marketing from the public web and drafts a collaboration email for it. You give it a company name (and, if you have one, a person or role at that company). It searches the web, pulls the useful passages, works out who the brand is talking to and where its marketing has gaps, and writes an outreach email plus an Instagram post idea. Every gap comes with the source it was based on, so the result can be checked before anyone sends it.
 
-The goal is:
+I started it as a GenAI course project and adapted it for the Center for Entrepreneurship at W. P. Carey, where we reach out to companies about collaborations. Researching one company by hand used to take about 45 minutes. With BrandPilot it takes under 10: staff read the brief, check the cited sources, edit the draft and send it.
 
-- input a company name
-- optionally input a target person at that company
-- search the public web for current marketing signals
-- identify likely audience and marketing gaps
-- generate a collaboration email and an Instagram post idea
-- keep LoRA for structure and style
-- keep RAG for current facts
+## How it works
 
-## What is in this repo now
+Two stages, kept separate on purpose:
 
-- `run_brand_assistant.py`
-  End-to-end CLI for retrieval plus generation.
-- `brand_assistant_rag.py`
-  Web search, extraction, passage scoring, and prompt building.
-- `brand_assistant_keras_backend.py`
-  Uses your existing Keras Gemma LoRA checkpoint.
-- `brand_assistant_openai_backend.py`
-  Talks to a local OpenAI-compatible server such as `mlx_lm.server`.
-- `prepare_mlx_dataset.py`
-  Converts your old Colab JSONL dataset into MLX-LM training files.
-- `brand_assistant_checkpoint.py`
-  Finds and inspects your Keras checkpoint files.
-- `brand_assistant_service.py`
-  Reusable service layer that powers the web app.
-- `app.py`
-  FastAPI server for the interactive frontend.
-- `webapp/`
-  Static frontend files for the browser UI.
+1. **Retrieval (RAG).** `ddgs` runs a set of web searches for the company. Pages are fetched by 4 workers in parallel, cleaned, cached, and split into 1,200-character chunks with 200 characters of overlap. Chunks are scored for how much they say about the company and its marketing, and the best few go into the prompt with their source links.
+2. **Generation (LoRA).** A Gemma 3 1B model with a rank-16 LoRA adapter turns that evidence into a strict JSON brief. I fine-tuned it on a custom dataset of 120 examples (2.6M trainable parameters, about 0.26% of the model). Held-out evaluation loss went from 1.23 to 0.87.
 
-## Recommended architecture
+Keeping facts in retrieval and style in the fine-tune means the model does not have to remember anything about the company. It only has to write well from what it is given.
 
-Use this as a two-stage system:
+The model's output is never trusted as-is. `brand_assistant_schema.py` pulls the JSON object out of whatever the model returns (code fences, extra text around it), checks every required field, and the post-processing step fills or repairs weak fields from the evidence before anything reaches the screen.
 
-1. Retrieval
-   Search the web and collect evidence.
-2. Generation
-   Feed compact evidence into a LoRA-tuned Gemma model that returns strict JSON.
+The web app is a FastAPI service. A request starts a background job on a 2-worker pool, the page polls the job for progress, and `/api/health` reports status.
 
-This keeps current facts in RAG and keeps style and structure in LoRA.
+```
+company name ──> web search ──> fetch + chunk + score ──> evidence packet
+                                                               │
+                         browser <── FastAPI <── validate <── Gemma 3 1B + LoRA
+```
 
-## Which model path should you use
+## Output
 
-### Path 1: Use your current Keras checkpoint
+The model returns JSON with these fields:
 
-Use this if you want to work with the checkpoint files already in this folder:
+`brand_summary`, `likely_target_audience`, `current_marketing_strategy`, `marketing_gaps`, `instagram_post_idea` (hook, concept, why it closes the gap), `email_subject`, `email_body`, `citations`.
 
-- `lora_weights.weights.h5`
-- `lora_weights_fixed.weights.h5`
+I moved from free text to JSON because free text was hard to validate and the early versions kept getting cut off. The notebook generated at 512 tokens in total while the prompt alone used most of that. A compact evidence block, JSON output and a separate token budget for the answer fixed it.
 
-This is the fastest way to reuse your old training.
+## Running it
 
-### Path 2: Best local Mac M4 path
+### Option 1: Docker (app in a container, model on the Mac)
 
-Use MLX-LM with a quantized Gemma 3 1B model and LoRA or QLoRA.
+The app and the retrieval pipeline run in Docker. The model runs on the Mac with MLX, because MLX uses Apple's GPU and Docker containers on a Mac cannot. The container talks to the model server at `host.docker.internal:8080`.
 
-Recommended local base model:
+```bash
+# terminal 1: model server on the Mac
+mlx_lm.server --model mlx-community/gemma-3-1b-it-qat-4bit --port 8080
 
-- `mlx-community/gemma-3-1b-it-qat-4bit`
+# terminal 2: the app
+docker compose up --build
+```
 
-Why:
+Open http://localhost:8010. Results are saved to `./outputs`. Stop with `docker compose down`.
 
-- designed for MLX
-- small enough for local work
-- strong quality for its size
-- quantized for lower memory use
-- works well with LoRA training in `mlx-lm`
+If the container cannot reach the model, start the server with `--host 0.0.0.0`.
 
-## Beginner guide
+A few choices in the Docker setup worth knowing:
+- dependencies install in their own layer, so changing code does not reinstall everything
+- the app runs as a non-root user
+- a health check hits `/api/health`
+- `.dockerignore` keeps model weights, adapters, caches and credentials such as `kaggle.json` out of the image
 
-## Part 1: Create a clean Python environment
-
-I strongly recommend Python `3.11` for the smoothest setup on Mac.
-
-### Option A: Conda
-
-This is the best option for your machine if you already see `(base)` in your terminal prompt.
+### Option 2: Local Python
 
 ```bash
 conda create -n lora-brand-assistant python=3.11 -y
 conda activate lora-brand-assistant
+pip install -r requirements-local.txt -r requirements-app.txt
 ```
 
-### Option B: Standard venv
+Retrieval only, no model needed (a good first check):
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
+python run_brand_assistant.py --backend rag-only --company "Airbnb"
 ```
 
-If `python3.11` is not installed:
-
-```bash
-brew install python@3.11
-```
-
-## Part 2: Install the lightweight RAG dependencies
-
-```bash
-pip install -r requirements-local.txt
-```
-
-This gives you the free search backend.
-
-## Part 3: Test retrieval only
-
-This step does not need your model yet. It only tests the RAG side.
-
-```bash
-python run_brand_assistant.py \
-  --backend rag-only \
-  --company "Nike" \
-  --person "Director of Brand Marketing"
-```
-
-Expected result:
-
-- a research packet is saved in `outputs/`
-- the packet contains search sources, evidence passages, and a grounded prompt
-
-## Part 4: Run with your current Keras checkpoint
-
-This path reuses your existing LoRA weights.
-
-### 4A. Install Keras dependencies
-
-```bash
-pip install -r requirements-keras.txt
-```
-
-If Keras later complains about the backend on macOS, install JAX separately and follow Apple’s `jax-metal` setup guide. If you want the smoother local path on a Mac M4, skip to Part 5 and use MLX-LM instead.
-
-### 4B. Set Kaggle credentials
-
-KerasHub built-in Gemma presets use Kaggle-hosted assets.
-
-Best secure permanent option:
-
-Store Kaggle's credential file at `~/.kaggle/kaggle.json` and lock down the permissions.
-
-```bash
-mkdir -p ~/.kaggle
-mv ~/Downloads/kaggle.json ~/.kaggle/kaggle.json
-chmod 600 ~/.kaggle/kaggle.json
-```
-
-The Keras backend in this project will automatically read that file if `KAGGLE_USERNAME` and `KAGGLE_KEY` are not already set.
-
-You can also do this for just the current terminal session:
-
-```bash
-export KAGGLE_USERNAME="your_kaggle_username"
-export KAGGLE_KEY="your_kaggle_key"
-```
-
-You can find these values by signing in to Kaggle, opening `Settings`, and creating a new API token. Kaggle will download a `kaggle.json` file that contains both values.
-
-If you want the variables to persist every time you open Terminal, add them to your `~/.zshrc` file:
-
-```bash
-echo 'export KAGGLE_USERNAME="your_kaggle_username"' >> ~/.zshrc
-echo 'export KAGGLE_KEY="your_kaggle_key"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-### 4C. Run the assistant
-
-```bash
-python run_brand_assistant.py \
-  --backend keras \
-  --company "Nike" \
-  --person "Director of Brand Marketing"
-```
-
-If you see a `ModuleNotFoundError: No module named 'jax'`, install the JAX backend:
-
-```bash
-pip install jax
-```
-
-For Apple Silicon GPU acceleration, also install:
-
-```bash
-xcode-select --install
-pip install jax-metal
-```
-
-Notes:
-
-- the script will prefer `lora_weights_fixed.weights.h5` if it exists
-- if no fixed file exists, it falls back to `lora_weights.weights.h5`
-- the code tries to infer the LoRA rank from the checkpoint
-
-## Part 4.5: Run the Interactive App
-
-This is the easiest way to use the project day to day.
-
-### 4.5A. Install app dependencies
-
-```bash
-pip install -r requirements-app.txt
-```
-
-### 4.5B. Start the app
-
-```bash
-./run_app.sh
-```
-
-This launcher script:
-
-- activates the `lora-brand-assistant` Conda environment
-- switches into the project folder automatically
-- clears an older app process on port `8010` if one is already running
-- starts the FastAPI app with the right backend settings
-
-### 4.5C. Open it in your browser
-
-```bash
-open http://127.0.0.1:8010
-```
-
-What the app does:
-
-- takes a company name and optional person or role
-- runs live RAG over the public web
-- looks up official company links when possible
-- generates a structured brand brief using your Gemma LoRA checkpoint
-- shows source links next to each gap so you can fact-check the result
-
-If you want to change the backend later, you can start the app with environment variables:
-
-```bash
-export BRAND_ASSISTANT_BACKEND=keras
-./run_app.sh
-```
-
-Or for an OpenAI-compatible local server:
-
-```bash
-export BRAND_ASSISTANT_BACKEND=openai-compatible
-export BRAND_ASSISTANT_API_BASE=http://localhost:8080/v1
-export BRAND_ASSISTANT_MODEL=mlx-community/gemma-3-1b-it-qat-4bit
-./run_app.sh
-```
-
-## Part 5: Best local Mac workflow with MLX-LM
-
-This is the path I recommend for a production-quality local setup on your Mac M4.
-
-### 5A. Install MLX-LM
-
-```bash
-pip install "mlx-lm[train]"
-```
-
-### 5B. Convert your old dataset into MLX-LM format
-
-Replace the input path with the JSONL file you used in Colab.
-
-```bash
-python prepare_mlx_dataset.py \
-  --input /path/to/brand_outreach_clean_v2.jsonl \
-  --output-dir data/mlx_brand_assistant
-```
-
-This creates:
-
-- `data/mlx_brand_assistant/train.jsonl`
-- `data/mlx_brand_assistant/valid.jsonl`
-- `data/mlx_brand_assistant/test.jsonl`
-
-### 5C. Train a local QLoRA adapter
-
-```bash
-mlx_lm.lora \
-  --model mlx-community/gemma-3-1b-it-qat-4bit \
-  --train \
-  --data data/mlx_brand_assistant \
-  --iters 600 \
-  --batch-size 1 \
-  --learning-rate 1e-5 \
-  --mask-prompt \
-  --adapter-path adapters/brand_assistant_1b_qat
-```
-
-What this does:
-
-- uses a 4-bit Gemma 3 1B base model
-- trains a QLoRA adapter
-- computes loss on the completion instead of the prompt
-- saves adapters into `adapters/brand_assistant_1b_qat`
-
-### 5D. Start a local MLX server
-
-Open a second terminal window:
-
-```bash
-source .venv/bin/activate
-mlx_lm.server --model mlx-community/gemma-3-1b-it-qat-4bit
-```
-
-By default the server runs at `http://localhost:8080/v1`.
-
-Use the same working directory when you later pass `--adapter-path`, because the MLX server expects that adapter path to be relative to where the server was started.
-
-### 5E. Run the assistant against your local MLX server
-
-Back in your first terminal:
+With the MLX model server running (see above):
 
 ```bash
 python run_brand_assistant.py \
   --backend openai-compatible \
   --api-base http://localhost:8080/v1 \
   --model mlx-community/gemma-3-1b-it-qat-4bit \
-  --adapter-path adapters/brand_assistant_1b_qat \
-  --company "Nike" \
-  --person "Director of Brand Marketing"
+  --company "Airbnb" --person "Director of Brand Marketing"
 ```
 
-This uses:
+Web app: `./run_app.sh`, then open http://127.0.0.1:8010.
 
-- free public-web retrieval from `ddgs`
-- your local Gemma 3 1B QLoRA adapter for generation
+### Using the original Keras checkpoint
 
-## Part 6: Run the app with Docker
+The first version of the adapter was trained in Keras on Colab, and the code can still load it (`--backend keras`, needs `requirements-keras.txt` and Kaggle credentials for the Gemma preset). The checkpoint files are not in this repo. For a Mac, MLX is the faster path.
 
-The web app (FastAPI + the RAG pipeline) runs in a container. The fine-tuned Gemma model keeps running on the Mac through `mlx_lm.server`, because MLX needs Apple's GPU, which Docker containers cannot use. The container reaches the model server at `host.docker.internal:8080`.
-
-### 6A. Start the model server on the Mac
+### Training the adapter with MLX
 
 ```bash
-conda activate lora-brand-assistant
-mlx_lm.server --model mlx-community/gemma-3-1b-it-qat-4bit --port 8080
-# add --adapter-path adapters to serve your LoRA adapter
+python prepare_mlx_dataset.py --input path/to/brand_outreach_clean_v2.jsonl --output-dir data/mlx_brand_assistant
+
+mlx_lm.lora --model mlx-community/gemma-3-1b-it-qat-4bit --train \
+  --data data/mlx_brand_assistant --iters 600 --batch-size 1 \
+  --learning-rate 1e-5 --mask-prompt --adapter-path adapters/brand_assistant_1b_qat
 ```
 
-### 6B. Build and start the app container
+`--mask-prompt` computes the loss only on the answer, not the prompt. Pass the same `--adapter-path` to `mlx_lm.server` to serve the fine-tuned model, and start the server from the folder that path is relative to.
 
-```bash
-docker compose up --build
-```
-
-Open `http://localhost:8010`. Health check: `http://localhost:8010/api/health`.
-
-Generated packets and results are written to `./outputs` on your machine.
-
-### 6C. Stop it
-
-```bash
-docker compose down
-```
-
-### What the Docker setup does
-
-- `Dockerfile`: Python 3.11 slim image; installs dependencies in their own layer so code edits rebuild fast; runs as a non-root user; includes a health check on `/api/health`.
-- `docker-compose.yml`: maps port 8010, points the app at the host's model server, and mounts `./outputs` so results survive container restarts.
-- `.dockerignore`: keeps model weights, adapters, caches and credentials (`kaggle.json`, `.env`) out of the image.
-
-If the app cannot reach the model, start the server with `--host 0.0.0.0` so the container can connect to it.
-
-## Part 7: Tests and continuous integration
-
-Unit tests cover the JSON output parser and validator, the retrieval helpers (chunking, company matching, query building) and the API (health check, input validation, unknown jobs). They need no model and no network.
+## Tests and CI
 
 ```bash
 pip install -r requirements-app.txt -r requirements-local.txt -r requirements-dev.txt
 pytest -q
 ```
 
-Every push runs GitHub Actions (`.github/workflows/ci.yml`): it installs dependencies, runs the tests, builds the Docker image and smoke-tests the running container through `/api/health`.
+The 17 tests cover the parts that should behave the same every time: pulling JSON out of messy model output and validating it, chunking and company matching in retrieval, and the API (health check, rejecting a blank company, 404 for an unknown job). They need no model and no network.
 
-## Output format
+GitHub Actions runs on every push: it installs dependencies, runs the tests, builds the Docker image, starts the container and checks that `/api/health` answers.
 
-The generator is asked to return strict JSON with:
+## Project layout
 
-- `brand_summary`
-- `likely_target_audience`
-- `current_marketing_strategy`
-- `marketing_gaps`
-- `instagram_post_idea`
-- `email_subject`
-- `email_body`
-- `citations`
+| File | What it does |
+|---|---|
+| `app.py` | FastAPI server and job handling |
+| `brand_assistant_service.py` | ties retrieval, generation and post-processing together |
+| `brand_assistant_rag.py` | search, fetching, chunking, scoring, prompt building |
+| `brand_assistant_schema.py` | JSON extraction and validation |
+| `brand_assistant_postprocess.py` | cleans up the brief and links each point to sources |
+| `brand_assistant_openai_backend.py` | calls an OpenAI-compatible server (MLX) |
+| `brand_assistant_keras_backend.py`, `brand_assistant_checkpoint.py` | Keras checkpoint loading and inference |
+| `prepare_mlx_dataset.py` | converts the training data to MLX format |
+| `run_brand_assistant.py` | command-line entry point |
+| `webapp/` | browser front end |
+| `tests/` | pytest suite |
 
-This is much better than the old plain-text section format because it is easier to validate and use in a real app.
+## What I would do next
 
-## Why your old outputs were getting cut off
-
-Your notebook trained and generated at `512` tokens total, while the prompt itself was already long.
-
-The new code improves this by:
-
-- using a compact evidence packet
-- using JSON instead of long prose sections
-- fitting the prompt to a higher sequence length
-- reserving completion budget for the final answer
-
-## Important reality check
-
-This repo is now much closer to a runnable software project than the original notebook, but there are still two practical limits:
-
-1. I did not fully run Gemma inference in this environment.
-   This machine does not already have the full Gemma runtime and credentials configured here.
-2. Your existing `.h5` checkpoints are Keras checkpoints, not MLX adapters.
-   So the best local Mac path still means retraining LoRA in MLX-LM from your dataset.
-
-That is the cleanest path if your goal is a strong local Mac M4 deployment.
-
-## Useful commands
-
-Inspect retrieval only:
-
-```bash
-python run_brand_assistant.py --backend rag-only --company "Airbnb"
-```
-
-Use your existing Keras checkpoint:
-
-```bash
-python run_brand_assistant.py --backend keras --company "Airbnb"
-```
-
-Use the interactive web app:
-
-```bash
-python -m uvicorn app:app --host 127.0.0.1 --port 8010
-```
-
-Use your local MLX server and adapter:
-
-```bash
-python run_brand_assistant.py \
-  --backend openai-compatible \
-  --api-base http://localhost:8080/v1 \
-  --model mlx-community/gemma-3-1b-it-qat-4bit \
-  --adapter-path adapters/brand_assistant_1b_qat \
-  --company "Airbnb"
-```
+- Measure retrieval properly: a small set of companies with hand-checked sources, and track how often the right pages make it into the prompt.
+- Retrain the adapter in MLX on a larger dataset and compare outputs side by side with the Keras version.
+- Add request metrics (latency per stage) so slow searches are easy to spot.
