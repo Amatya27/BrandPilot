@@ -1,0 +1,18 @@
+services:
+  brand-assistant:
+    build: .
+    image: lora-brand-assistant:latest
+    ports:
+      - "8010:8010"
+    environment:
+      BRAND_ASSISTANT_BACKEND: openai-compatible
+      # Model server on the host machine (mlx_lm.server listens on port 8080).
+      BRAND_ASSISTANT_API_BASE: http://host.docker.internal:8080/v1
+      BRAND_ASSISTANT_MODEL: mlx-community/gemma-3-1b-it-qat-4bit
+      # Uncomment and set if you serve the model with your LoRA adapter.
+      # BRAND_ASSISTANT_ADAPTER_PATH: adapters
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # makes the host reachable on Linux too
+    volumes:
+      - ./outputs:/app/outputs                # keep generated packets and results on your machine
+    restart: unless-stopped

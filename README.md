@@ -1,5 +1,7 @@
 # LoRA Brand Assistant
 
+[![CI](https://github.com/Amatya27/BrandPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Amatya27/BrandPilot/actions/workflows/ci.yml)
+
 This project turns your notebook prototype into a cleaner LoRA + RAG workflow for brand outreach.
 
 The goal is:
@@ -328,6 +330,53 @@ This uses:
 
 - free public-web retrieval from `ddgs`
 - your local Gemma 3 1B QLoRA adapter for generation
+
+## Part 6: Run the app with Docker
+
+The web app (FastAPI + the RAG pipeline) runs in a container. The fine-tuned Gemma model keeps running on the Mac through `mlx_lm.server`, because MLX needs Apple's GPU, which Docker containers cannot use. The container reaches the model server at `host.docker.internal:8080`.
+
+### 6A. Start the model server on the Mac
+
+```bash
+conda activate lora-brand-assistant
+mlx_lm.server --model mlx-community/gemma-3-1b-it-qat-4bit --port 8080
+# add --adapter-path adapters to serve your LoRA adapter
+```
+
+### 6B. Build and start the app container
+
+```bash
+docker compose up --build
+```
+
+Open `http://localhost:8010`. Health check: `http://localhost:8010/api/health`.
+
+Generated packets and results are written to `./outputs` on your machine.
+
+### 6C. Stop it
+
+```bash
+docker compose down
+```
+
+### What the Docker setup does
+
+- `Dockerfile`: Python 3.11 slim image; installs dependencies in their own layer so code edits rebuild fast; runs as a non-root user; includes a health check on `/api/health`.
+- `docker-compose.yml`: maps port 8010, points the app at the host's model server, and mounts `./outputs` so results survive container restarts.
+- `.dockerignore`: keeps model weights, adapters, caches and credentials (`kaggle.json`, `.env`) out of the image.
+
+If the app cannot reach the model, start the server with `--host 0.0.0.0` so the container can connect to it.
+
+## Part 7: Tests and continuous integration
+
+Unit tests cover the JSON output parser and validator, the retrieval helpers (chunking, company matching, query building) and the API (health check, input validation, unknown jobs). They need no model and no network.
+
+```bash
+pip install -r requirements-app.txt -r requirements-local.txt -r requirements-dev.txt
+pytest -q
+```
+
+Every push runs GitHub Actions (`.github/workflows/ci.yml`): it installs dependencies, runs the tests, builds the Docker image and smoke-tests the running container through `/api/health`.
 
 ## Output format
 
