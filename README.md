@@ -1,6 +1,19 @@
-# BrandPilot
-
-[![CI](https://github.com/Amatya27/BrandPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Amatya27/BrandPilot/actions/workflows/ci.yml)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="media/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="media/banner-light.svg">
+    <img src="media/banner-light.svg" width="100%" alt="BrandPilot: researches a company's marketing and drafts outreach with sources">
+  </picture>
+</p>
+<p align="center">
+  <a href="https://github.com/Amatya27/BrandPilot/actions/workflows/ci.yml"><img src="https://github.com/Amatya27/BrandPilot/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/Gemma%203%20+%20LoRA-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemma 3 + LoRA">
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
+  <img src="https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white" alt="Kubernetes">
+  <img src="https://img.shields.io/badge/Prometheus-E6522C?style=flat-square&logo=prometheus&logoColor=white" alt="Prometheus">
+</p>
 
 BrandPilot researches a company's marketing from the public web and drafts a collaboration email for it. You give it a company name (and, if you have one, a person or role at that company). It searches the web, pulls the useful passages, works out who the brand is talking to and where its marketing has gaps, and writes an outreach email plus an Instagram post idea. Every gap comes with the source it was based on, so the result can be checked before anyone sends it.
 
