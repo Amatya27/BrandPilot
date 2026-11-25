@@ -19,6 +19,11 @@ BrandPilot researches a company's marketing from the public web and drafts a col
 
 I started it as a GenAI course project and adapted it for the Center for Entrepreneurship at W. P. Carey, where we reach out to companies about collaborations. Researching one company by hand used to take about 45 minutes. With BrandPilot it takes under 10: staff read the brief, check the cited sources, edit the draft and send it.
 
+<p align="center">
+  <img src="media/demo.gif" width="720" alt="BrandPilot run for Reliance Jio: live progress while it searches and reviews sources, then the brief with sourced marketing gaps and an Instagram post idea">
+</p>
+<p align="center"><sub>A real run from my demo recording: type a company, watch it find the official links and review sources, then read the brief. Every gap links to the page it came from.</sub></p>
+
 ## How it works
 
 Two stages, kept separate on purpose:
